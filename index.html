@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KS-14 チェンジギヤ計算機（ギヤ配置図つき）</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 15px; background: #f0f2f5; color: #333; margin: 0; }
+  .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 640px; margin-left: auto; margin-right: auto; }
+  h2 { font-size: 1.1rem; margin-top: 0; border-bottom: 2px solid #007bff; padding-bottom: 6px; color: #1a73e8; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  label { font-size: 0.85rem; font-weight: bold; color: #555; display: block; margin-bottom: 4px; }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; }
+  textarea { resize: vertical; height: 50px; font-size: 0.85rem; }
+  button { width: 100%; background: #007bff; color: white; border: none; padding: 12px; font-size: 1.05rem; font-weight: bold; border-radius: 6px; cursor: pointer; transition: 0.2s; }
+  button:active { background: #0056b3; }
+  .res-box { background: #f8f9fa; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin-top: 12px; font-size: 0.95rem; }
+  .res-title { font-weight: bold; color: #1e293b; margin-bottom: 6px; }
+  .val-highlight { font-weight: bold; color: #d9381e; font-size: 1.05rem; }
+  .gear-val { font-weight: bold; color: #0d6efd; font-size: 1rem; }
+  .note { font-size: 0.75rem; color: #666; margin-top: 4px; }
+  .canvas-wrap { text-align: center; margin-top: 10px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px; }
+  canvas { max-width: 100%; height: auto; background: #fff; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h2>加工諸元入力 (KS-14)</h2>
+  <div class="grid">
+    <div>
+      <label>モジュール (m)</label>
+      <input type="number" id="m" step="any" value="2">
+    </div>
+    <div>
+      <label>ねじれ角 (β [度])</label>
+      <input type="number" id="beta" step="any" value="23">
+    </div>
+    <div>
+      <label>ワーク歯数 (Z)</label>
+      <input type="number" id="Z" step="any" value="96">
+    </div>
+    <div>
+      <label>カッター条数 (Zc)</label>
+      <input type="number" id="Zc" step="any" value="3">
+    </div>
+  </div>
+
+  <label>手持ちギヤリスト（カンマ区切り）</label>
+  <textarea id="gearList">24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 42, 43, 44, 45, 48, 50, 52, 54, 55, 60, 64, 70, 72, 75, 80, 83, 85, 90, 93, 96, 100</textarea>
+  <div class="note">※歯数を追加・変更すると、その歯数の中だけで最適なギヤ比と図形を再計算します。</div>
+
+  <div style="margin-top: 14px;">
+    <button onclick="calculate()">最適ギヤ比を計算して配置図を描画</button>
+  </div>
+</div>
+
+<div class="card" id="resultCard" style="display:none;">
+  <h2>計算結果 & ギヤ配置図</h2>
+  
+  <div class="res-box">
+    <div class="res-title">■ ヘリカル（差動ギヤ）</div>
+    <div>理論比: <span class="val-highlight" id="helicalTarget">-</span></div>
+    <div id="helicalResultText" style="margin-top:6px;"></div>
+    <div class="canvas-wrap">
+      <div style="font-size:0.8rem; color:#64748b; margin-bottom:4px; font-weight:bold;">【ヘリカル 4段掛け配置スケッチ】 (A→B, 同軸C→D)</div>
+      <canvas id="helicalCanvas" width="560" height="260"></canvas>
+    </div>
+  </div>
+
+  <div class="res-box">
+    <div class="res-title">■ 歯数（分度ギヤ）</div>
+    <div>理論比: <span class="val-highlight" id="indexTarget">-</span></div>
+    <div id="indexResultText" style="margin-top:6px;"></div>
+    <div class="canvas-wrap">
+      <div style="font-size:0.8rem; color:#64748b; margin-bottom:4px; font-weight:bold;">【歯数 2段掛け配置スケッチ】 (駆動A → 従動B)</div>
+      <canvas id="indexCanvas" width="560" height="200"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+function calculate() {
+  const m = parseFloat(document.getElementById('m').value);
+  const beta = parseFloat(document.getElementById('beta').value);
+  const Z = parseFloat(document.getElementById('Z').value);
+  const Zc = parseFloat(document.getElementById('Zc').value);
+
+  if (!m || !Z || !Zc) {
+    alert("数値を正しく入力してください。");
+    return;
+  }
+
+  const rawGears = document.getElementById('gearList').value.split(/[,、\s\n]+/);
+  const gears = [];
+  for (let g of rawGears) {
+    const val = parseInt(g, 10);
+    if (!isNaN(val) && val > 0 && !gears.includes(val)) gears.push(val);
+  }
+  gears.sort((a, b) => a - b);
+
+  const rad = beta * Math.PI / 180;
+  const targetHelical = beta > 0 ? (7.957747 * Math.sin(rad)) / (m * Zc) : 0;
+  const targetIndex = (12 * Zc) / Z;
+
+  document.getElementById('resultCard').style.display = 'block';
+  document.getElementById('helicalTarget').innerText = targetHelical > 0 ? targetHelical.toFixed(8) : "ねじれ角なし(0)";
+  document.getElementById('indexTarget').innerText = targetIndex.toFixed(8);
+
+  // ヘリカル計算
+  if (targetHelical > 0) {
+    const resH = solveGears(targetHelical, gears);
+    document.getElementById('helicalResultText').innerHTML = 
+      `<b>【推奨4段】</b> <span class="gear-val">A: ${resH.b4.a} / B: ${resH.b4.b} × C: ${resH.b4.c} / D: ${resH.b4.d}</span><br>` +
+      `<span style="font-size:0.85rem; color:#475569;">ギヤ比: ${resH.b4.ratio.toFixed(6)} (誤差: ${resH.b4.diff.toFixed(6)})</span><br>` +
+      `<span style="font-size:0.85rem; color:#64748b;">※2段参考: A: ${resH.b2.a} / B: ${resH.b2.b} (誤差: ${resH.b2.diff.toFixed(6)})</span>`;
+    draw4GearDiagram('helicalCanvas', resH.b4.a, resH.b4.b, resH.b4.c, resH.b4.d);
+  } else {
+    document.getElementById('helicalResultText').innerHTML = "ねじれ角0のため差動ギヤ掛け不要";
+  }
+
+  // 歯数（分度）計算
+  const resI = solveGears(targetIndex, gears);
+  document.getElementById('indexResultText').innerHTML = 
+    `<b>【推奨2段】</b> <span class="gear-val">A: ${resI.b2.a} / B: ${resI.b2.b}</span> (ギヤ比: ${resI.b2.ratio.toFixed(6)}, 誤差: ${resI.b2.diff.toFixed(6)})<br>` +
+    `<span style="font-size:0.85rem; color:#64748b;">※4段参考: A: ${resI.b4.a} / B: ${resI.b4.b} × C: ${resI.b4.c} / D: ${resI.b4.d}</span>`;
+  draw2GearDiagram('indexCanvas', resI.b2.a, resI.b2.b);
+}
+
+function solveGears(target, gears) {
+  const n = gears.length;
+  let b2 = { a: 0, b: 0, diff: 999999, ratio: 0 };
+  let b4 = { a: 0, b: 0, c: 0, d: 0, diff: 999999, ratio: 0 };
+
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      const r = gears[i] / gears[j];
+      const diff = Math.abs(r - target);
+      if (diff < b2.diff) {
+        b2 = { a: gears[i], b: gears[j], diff: diff, ratio: r };
+        if (diff < 0.0000001) break;
+      }
+    }
+    if (b2.diff < 0.0000001) break;
+  }
+
+  outer:
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      for (let k = 0; k < n; k++) {
+        for (let l = 0; l < n; l++) {
+          const r = (gears[i] * gears[k]) / (gears[j] * gears[l]);
+          const diff = Math.abs(r - target);
+          if (diff < b4.diff) {
+            b4 = { a: gears[i], b: gears[j], c: gears[k], d: gears[l], diff: diff, ratio: r };
+            if (diff < 0.0000001) break outer;
+          }
+        }
+      }
+    }
+  }
+  return { b2, b4 };
+}
+
+// 歯車円＋歯数描画補助
+function renderGear(ctx, x, y, r, label, teeth, color, fillColor) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+
+  // 簡易歯先ピッチ表現
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 軸穴
+  ctx.beginPath();
+  ctx.arc(x, y, 6, 0, Math.PI * 2);
+  ctx.fillStyle = "#333";
+  ctx.fill();
+
+  // テキスト
+  ctx.font = "bold 13px sans-serif";
+  ctx.fillStyle = "#1e293b";
+  ctx.textAlign = "center";
+  ctx.fillText(label, x, y - 10);
+  ctx.font = "bold 15px sans-serif";
+  ctx.fillStyle = color;
+  ctx.fillText(`Z=${teeth}`, x, y + 14);
+  ctx.restore();
+}
+
+// 4段ギヤ配置図描画 (A -> B, 同軸C -> D)
+function draw4GearDiagram(canvasId, A, B, C, D) {
+  const cvs = document.getElementById(canvasId);
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  const k = 0.85; // スケール調整
+  const rA = Math.max(22, A * k);
+  const rB = Math.max(22, B * k);
+  const rC = Math.max(20, C * k * 0.75); // 同軸内側表現のため少し小径化スケール
+  const rD = Math.max(22, D * k);
+
+  const xA = 110;
+  const yA = 130;
+  const xB = xA + rA + rB;
+  const yB = 130;
+  const xD = xB + rC + rD;
+  const yD = 130;
+
+  // 接続ライン・軸ガイド
+  ctx.beginPath();
+  ctx.moveTo(xA, yA);
+  ctx.lineTo(xD, yD);
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 1. ギヤ A (駆動軸)
+  renderGear(ctx, xA, yA, rA, "駆動 (A)", A, "#0284c7", "#e0f2fe");
+
+  // 2. ギヤ B (中間軸・外)
+  renderGear(ctx, xB, yB, rB, "中間 (B)", B, "#0d9488", "#ccfbf1");
+
+  // 3. ギヤ C (中間軸・内/同軸キー固定)
+  renderGear(ctx, xB, yB, rC, "同軸 (C)", C, "#b45309", "#fef3c7");
+
+  // 4. ギヤ D (従動軸)
+  renderGear(ctx, xD, yD, rD, "従動 (D)", D, "#4f46e5", "#e0e7ff");
+
+  // 同軸案内線
+  ctx.font = "11px sans-serif";
+  ctx.fillStyle = "#b45309";
+  ctx.textAlign = "center";
+  ctx.fillText("▲ BとCは同一シャフト(一体回転)", xB, yB + rB + 20);
+}
+
+// 2段ギヤ配置図描画 (A -> B)
+function draw2GearDiagram(canvasId, A, B) {
+  const cvs = document.getElementById(canvasId);
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  const k = 0.95;
+  const rA = Math.max(28, A * k);
+  const rB = Math.max(28, B * k);
+
+  const totalW = rA + rB;
+  const startX = (cvs.width - totalW) / 2;
+  const xA = startX + rA;
+  const yA = 100;
+  const xB = xA + rA + rB;
+  const yB = 100;
+
+  // 中心線
+  ctx.beginPath();
+  ctx.moveTo(xA, yA);
+  ctx.lineTo(xB, yB);
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  renderGear(ctx, xA, yA, rA, "駆動軸 (A)", A, "#0284c7", "#e0f2fe");
+  renderGear(ctx, xB, yB, rB, "従動軸 (B)", B, "#4f46e5", "#e0e7ff");
+}
+</script>
+
+</body>
+</html>
